@@ -192,12 +192,25 @@
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 
+        <!-- Test Voice Button -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnTestVoice"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:padding="12dp"
+            android:text="@string/test_voice"
+            android:textSize="16sp"
+            app:backgroundTint="@color/accent_yellow"
+            android:textColor="@color/night_bg"
+            app:cornerRadius="12dp" />
+
         <!-- Last announcement -->
         <TextView
             android:id="@+id/tvLastAnnouncement"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
+            android:layout_marginTop="16dp"
             android:layout_marginBottom="24dp"
             android:text=""
             android:textColor="@color/text_secondary"

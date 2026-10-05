@@ -15,10 +15,10 @@ class ShakeDetector(private val onShake: () -> Unit) : SensorEventListener {
 
     companion object {
         /** Minimum acceleration (m/s²) beyond gravity to count as a shake. */
-        private const val SHAKE_THRESHOLD = 12.0f
+        private const val SHAKE_THRESHOLD = 9.0f
 
         /** Cooldown between accepted shakes (ms). */
-        private const val SHAKE_COOLDOWN_MS = 2_000L
+        private const val SHAKE_COOLDOWN_MS = 1_500L
     }
 
     private var lastShakeTime: Long = 0

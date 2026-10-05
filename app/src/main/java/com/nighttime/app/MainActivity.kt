@@ -1,14 +1,21 @@
 package com.nighttime.app
 
+import android.annotation.SuppressLint
+import android.content.Intent
 import android.hardware.Sensor
 import android.hardware.SensorManager
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.VibrationEffect
+import android.os.Vibrator
 import android.speech.tts.TextToSpeech
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.timepicker.MaterialTimePicker
@@ -34,6 +41,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private lateinit var switchEnable: SwitchMaterial
     private lateinit var btnStartTime: MaterialButton
     private lateinit var btnEndTime: MaterialButton
+    private lateinit var btnTestVoice: MaterialButton
 
     // Clock updater
     private val handler = Handler(Looper.getMainLooper())
@@ -50,8 +58,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
         nightTimeManager = NightTimeManager(this)
 
-        // Initialize TTS
-        tts = TextToSpeech(this, this)
+        // Initialize TTS with smart engine discovery
+        initTextToSpeech()
 
         // Bind views
         tvStatus = findViewById(R.id.tvStatus)
@@ -60,6 +68,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         switchEnable = findViewById(R.id.switchEnable)
         btnStartTime = findViewById(R.id.btnStartTime)
         btnEndTime = findViewById(R.id.btnEndTime)
+        btnTestVoice = findViewById(R.id.btnTestVoice)
 
         // Setup shake detector
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
@@ -70,7 +79,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         switchEnable.setOnCheckedChangeListener { _, isChecked ->
             nightTimeManager.isEnabled = isChecked
             updateUI()
-            if (isChecked) registerShakeListener() else unregisterShakeListener()
+            if (isChecked) {
+                registerShakeListener()
+                startNightTimeService()
+            } else {
+                unregisterShakeListener()
+                stopNightTimeService()
+            }
         }
 
         // Time pickers
@@ -80,6 +95,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         btnStartTime.setOnClickListener { showTimePicker(isStart = true) }
         btnEndTime.setOnClickListener { showTimePicker(isStart = false) }
 
+        // Test Voice button
+        btnTestVoice.setOnClickListener {
+            speakCurrentTime()
+            Toast.makeText(this, "Testing voice announcement...", Toast.LENGTH_SHORT).show()
+        }
+
         updateUI()
     }
 
@@ -87,6 +108,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         super.onResume()
         if (nightTimeManager.isEnabled) {
             registerShakeListener()
+            startNightTimeService()
         }
         handler.post(clockRunnable)
     }
@@ -95,6 +117,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         super.onPause()
         unregisterShakeListener()
         handler.removeCallbacks(clockRunnable)
+    }
+
+    private fun startNightTimeService() {
+        val intent = Intent(this, NightTimeService::class.java)
+        ContextCompat.startForegroundService(this, intent)
+    }
+
+    private fun stopNightTimeService() {
+        val intent = Intent(this, NightTimeService::class.java)
+        stopService(intent)
     }
 
     override fun onDestroy() {
@@ -106,12 +138,35 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     // ── TextToSpeech.OnInitListener ──────────────────────────────────────
 
+    @SuppressLint("QueryPermissionsNeeded")
+    private fun initTextToSpeech() {
+        try {
+            val ttsIntent = Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE)
+            val resolveInfos = packageManager.queryIntentServices(ttsIntent, 0)
+            if (resolveInfos.isNotEmpty()) {
+                val enginePackage = resolveInfos[0].serviceInfo.packageName
+                tts = TextToSpeech(this, this, enginePackage)
+            } else {
+                tts = TextToSpeech(this, this)
+            }
+        } catch (_: Exception) {
+            tts = TextToSpeech(this, this)
+        }
+    }
+
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
-            tts?.language = Locale.getDefault()
+            val result = tts?.setLanguage(Locale.getDefault())
+            if (result == null || result < TextToSpeech.SUCCESS) {
+                tts?.setLanguage(Locale.US)
+            }
             ttsReady = true
         } else {
-            Toast.makeText(this, "Text-to-Speech not available", Toast.LENGTH_LONG).show()
+            Toast.makeText(
+                this,
+                "TTS engine not found. If using an emulator, please install Google TTS or test on a physical phone.",
+                Toast.LENGTH_LONG
+            ).show()
         }
     }
 
@@ -134,23 +189,52 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         sensorManager.unregisterListener(shakeDetector)
     }
 
-    // ── Shake handler ────────────────────────────────────────────────────
+    // ── Shake handler & Speech ───────────────────────────────────────────
 
     private fun onShakeDetected() {
-        if (!nightTimeManager.isNightTimeNow()) {
-            // Outside night hours — silently ignore
-            runOnUiThread {
-                tvLastAnnouncement.text = "Shake detected — outside night hours"
-            }
+        if (!nightTimeManager.isEnabled) {
             return
         }
+        speakCurrentTime()
+    }
 
+    private fun speakCurrentTime() {
+        // Always trigger haptic vibration and time display as guaranteed feedback
+        triggerVibrationAndBeep()
+
+        if (ttsReady && tts != null) {
+            performSpeech()
+        } else {
+            // TTS not available on device/emulator, fallback to prominent Toast announcement
+            val now = Calendar.getInstance()
+            val timeFormat = SimpleDateFormat("h:mm a", Locale.getDefault())
+            val formattedTime = timeFormat.format(now.time)
+            Toast.makeText(this, "🕒 Current Time: $formattedTime (Vibration & Beep)", Toast.LENGTH_LONG).show()
+            runOnUiThread {
+                tvLastAnnouncement.text = "Last announced: $formattedTime (Vibration & Beep)"
+            }
+        }
+    }
+
+    private fun triggerVibrationAndBeep() {
+        try {
+            val vibrator = getSystemService(VIBRATOR_SERVICE) as Vibrator
+            vibrator.vibrate(VibrationEffect.createOneShot(350, VibrationEffect.DEFAULT_AMPLITUDE))
+
+            val toneGen = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
+            toneGen.startTone(ToneGenerator.TONE_PROP_ACK, 250)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun performSpeech() {
         val now = Calendar.getInstance()
         val hour = now.get(Calendar.HOUR_OF_DAY)
         val minute = now.get(Calendar.MINUTE)
 
         // Build a natural-sounding time string
-        val amPm = if (hour < 12) "A M" else "P M"
+        val amPm = if (hour < 12) "AM" else "PM"
         val displayHour = when {
             hour == 0 -> 12
             hour > 12 -> hour - 12
@@ -168,10 +252,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             "The time is $displayHour $minuteText $amPm"
         }
 
-        // Speak the time
-        if (ttsReady) {
-            tts?.speak(speech, TextToSpeech.QUEUE_FLUSH, null, "time_announce")
-        }
+        tts?.speak(speech, TextToSpeech.QUEUE_FLUSH, null, "time_announce")
 
         val timeFormat = SimpleDateFormat("h:mm a", Locale.getDefault())
         val formattedTime = timeFormat.format(Date())
